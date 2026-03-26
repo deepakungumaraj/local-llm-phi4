@@ -1,11 +1,64 @@
+import json
+import re
+import uuid
+import asyncio
 from typing import TypedDict, Annotated
 from langchain_ollama import ChatOllama
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, BaseMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, BaseMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from tools import tools as local_tools
 
 llm = ChatOllama(model="phi4-mini")
+
+SYSTEM_PROMPT = (
+    "You are a helpful AI assistant with access to tools. "
+    "When the user asks you to do something that requires a tool, call the tool immediately with the best arguments you can infer from the conversation. "
+    "Do NOT simulate or fabricate tool responses. Do NOT include raw markup, tags, or JSON in your replies. "
+    "If a tool requires arguments you do not have, ask the user for the missing information instead of calling the tool with empty arguments. "
+    "After receiving a tool result, summarize it in plain language for the user."
+)
+
+# Patterns for tool calls that phi4-mini emits as raw text
+_TOOL_CALL_PATTERNS = [
+    re.compile(r'\[?\{["\']name["\']\s*:\s*["\'](\w+)["\'].*?["\']arguments["\']\s*:\s*(\{.*?\})', re.DOTALL),
+]
+
+
+def _parse_text_tool_calls(content, tool_map):
+    """Extract tool calls from raw text content when the model doesn't use structured tool_calls."""
+    if not content or not isinstance(content, str):
+        return []
+    calls = []
+    try:
+        # Try to parse as JSON array of tool calls
+        cleaned = content.strip()
+        # Remove common surrounding markup tags
+        cleaned = re.sub(r'<\|/?[a-z_]+\|>', '', cleaned).strip()
+        if cleaned.startswith('['):
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, list):
+                for item in parsed:
+                    name = item.get("name", "")
+                    args = item.get("arguments", {})
+                    if isinstance(args, str):
+                        args = json.loads(args) if args.strip() else {}
+                    if name in tool_map:
+                        calls.append({"name": name, "args": args, "id": uuid.uuid4().hex[:8]})
+                return calls
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        pass
+    # Fallback: regex extraction
+    for pattern in _TOOL_CALL_PATTERNS:
+        for match in pattern.finditer(content):
+            name = match.group(1)
+            try:
+                args = json.loads(match.group(2))
+            except json.JSONDecodeError:
+                args = {}
+            if name in tool_map:
+                calls.append({"name": name, "args": args, "id": uuid.uuid4().hex[:8]})
+    return calls
 
 
 class AgentState(TypedDict):
@@ -19,10 +72,24 @@ def build_agent(extra_tools=None):
 
     def agent_node(state: AgentState):
         print("\n[Agent] Thinking...")
-        response = llm_with_tools.invoke(state["messages"])
+        msgs = state["messages"]
+        if not msgs or not isinstance(msgs[0], SystemMessage):
+            msgs = [SystemMessage(content=SYSTEM_PROMPT)] + list(msgs)
+        response = llm_with_tools.invoke(msgs)
+
+        # If the model emitted tool calls as raw text instead of structured tool_calls, parse them
+        if not (hasattr(response, "tool_calls") and response.tool_calls):
+            text_calls = _parse_text_tool_calls(response.content, tool_map)
+            if text_calls:
+                print(f"[Agent] Parsed {len(text_calls)} tool call(s) from text output")
+                response = AIMessage(
+                    content="",
+                    tool_calls=text_calls,
+                )
+
         return {"messages": [response]}
 
-    def tool_node(state: AgentState):
+    async def tool_node(state: AgentState):
         last_message = state["messages"][-1]
         tool_results = []
         for tool_call in last_message.tool_calls:
@@ -30,7 +97,7 @@ def build_agent(extra_tools=None):
             tool_args = tool_call["args"]
             print(f"\n[Tool] Calling: {tool_name} with args: {tool_args}")
             if tool_name in tool_map:
-                result = tool_map[tool_name].invoke(tool_args)
+                result = await tool_map[tool_name].ainvoke(tool_args)
             else:
                 result = f"Tool '{tool_name}' not found."
             tool_results.append(

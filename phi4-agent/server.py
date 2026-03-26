@@ -45,7 +45,7 @@ class ChatRequest(BaseModel):
 @app.post("/chat")
 async def chat(request: ChatRequest):
     try:
-        result = app.state.agent.invoke({
+        result = await app.state.agent.ainvoke({
             "messages": [HumanMessage(content=request.message)]
         })
         response = result["messages"][-1].content
