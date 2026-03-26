@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import uuid
 import asyncio
@@ -11,13 +12,23 @@ from tools import tools as local_tools
 
 llm = ChatOllama(model="phi4-mini")
 
-SYSTEM_PROMPT = (
-    "You are a helpful AI assistant with access to tools. "
-    "When the user asks you to do something that requires a tool, call the tool immediately with the best arguments you can infer from the conversation. "
-    "Do NOT simulate or fabricate tool responses. Do NOT include raw markup, tags, or JSON in your replies. "
-    "If a tool requires arguments you do not have, ask the user for the missing information instead of calling the tool with empty arguments. "
-    "After receiving a tool result, summarize it in plain language for the user."
-)
+_INSTRUCTIONS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instructions.md")
+
+
+def _load_system_prompt():
+    """Load system prompt from instructions.md. Falls back to a default if the file is missing."""
+    try:
+        with open(_INSTRUCTIONS_PATH, "r", encoding="utf-8") as f:
+            prompt = f.read().strip()
+        if prompt:
+            print(f"[Agent] Loaded system prompt from {_INSTRUCTIONS_PATH} ({len(prompt)} chars)")
+            return prompt
+    except FileNotFoundError:
+        pass
+    return (
+        "You are a helpful AI assistant with access to tools. "
+        "Call tools when needed. Do not fabricate tool responses."
+    )
 
 # Patterns for tool calls that phi4-mini emits as raw text
 _TOOL_CALL_PATTERNS = [
@@ -69,12 +80,13 @@ def build_agent(extra_tools=None):
     all_tools = list(local_tools) + (extra_tools or [])
     llm_with_tools = llm.bind_tools(all_tools)
     tool_map = {t.name: t for t in all_tools}
+    system_prompt = _load_system_prompt()
 
     def agent_node(state: AgentState):
         print("\n[Agent] Thinking...")
         msgs = state["messages"]
         if not msgs or not isinstance(msgs[0], SystemMessage):
-            msgs = [SystemMessage(content=SYSTEM_PROMPT)] + list(msgs)
+            msgs = [SystemMessage(content=system_prompt)] + list(msgs)
         response = llm_with_tools.invoke(msgs)
 
         # If the model emitted tool calls as raw text instead of structured tool_calls, parse them
