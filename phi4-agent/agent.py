@@ -11,7 +11,7 @@ from langgraph.graph.message import add_messages
 from tools import tools as local_tools
 
 MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
-llm = ChatOllama(model=MODEL, timeout=120)
+llm = ChatOllama(model=MODEL, timeout=120, num_ctx=4096)
 
 _INSTRUCTIONS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instructions.md")
 
