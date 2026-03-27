@@ -10,7 +10,8 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from tools import tools as local_tools
 
-llm = ChatOllama(model="phi4-mini", timeout=120)
+MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
+llm = ChatOllama(model=MODEL, timeout=120)
 
 _INSTRUCTIONS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instructions.md")
 
@@ -39,6 +40,15 @@ _TOOL_CALL_PATTERNS = [
 ]
 
 
+def _fix_json(text):
+    """Attempt to fix common JSON errors from LLM output."""
+    # Fix missing quote before colon in keys: {"key: "value"} → {"key": "value"}
+    text = re.sub(r'(\w)(:\s*")', r'\1"\2', text)
+    # Fix single quotes used as JSON delimiters
+    text = text.replace("'", '"')
+    return text
+
+
 def _parse_text_tool_calls(content, tool_map):
     """Extract tool calls from raw text content when the model doesn't use structured tool_calls."""
     if not content or not isinstance(content, str):
@@ -47,6 +57,10 @@ def _parse_text_tool_calls(content, tool_map):
     # Remove common surrounding markup tags
     cleaned = content.strip()
     cleaned = re.sub(r'<\|/?[a-z_]+\|>', '', cleaned).strip()
+    # Remove markdown code fences
+    cleaned = re.sub(r'```(?:json)?\s*', '', cleaned).strip()
+    # Fix common LLM JSON errors
+    cleaned = _fix_json(cleaned)
 
     # Strategy 1: Try to parse as JSON array of tool calls
     try:
