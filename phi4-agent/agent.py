@@ -10,7 +10,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from tools import tools as local_tools
 
-llm = ChatOllama(model="phi4-mini")
+llm = ChatOllama(model="phi4-mini", timeout=120)
 
 _INSTRUCTIONS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instructions.md")
 
@@ -82,12 +82,12 @@ def build_agent(extra_tools=None):
     tool_map = {t.name: t for t in all_tools}
     system_prompt = _load_system_prompt()
 
-    def agent_node(state: AgentState):
+    async def agent_node(state: AgentState):
         print("\n[Agent] Thinking...")
         msgs = state["messages"]
         if not msgs or not isinstance(msgs[0], SystemMessage):
             msgs = [SystemMessage(content=system_prompt)] + list(msgs)
-        response = llm_with_tools.invoke(msgs)
+        response = await llm_with_tools.ainvoke(msgs)
 
         # If the model emitted tool calls as raw text instead of structured tool_calls, parse them
         if not (hasattr(response, "tool_calls") and response.tool_calls):

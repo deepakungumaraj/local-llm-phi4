@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import "./App.css";
 
 function App() {
@@ -7,9 +7,11 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [statusText, setStatusText] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
+  const abortRef = useRef(null);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -54,6 +56,15 @@ function App() {
     }
   };
 
+  const stopGeneration = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    setLoading(false);
+    setStatusText("");
+  }, []);
+
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
 
@@ -76,25 +87,110 @@ function App() {
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setLoading(true);
+    setStatusText("Thinking...");
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let accumulated = "";
 
     try {
-      const res = await fetch("http://localhost:8000/chat", {
+      const res = await fetch("http://localhost:8000/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: input }),
+        signal: controller.signal,
       });
-      const data = await res.json();
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: data.response },
-      ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "Failed to connect to the agent." },
-      ]);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      // Add a placeholder assistant message for streaming tokens into
+      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE lines from buffer
+        const lines = buffer.split("\n");
+        buffer = lines.pop(); // keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            var eventType = line.slice(7).trim();
+          } else if (line.startsWith("data: ") && eventType) {
+            try {
+              const payload = JSON.parse(line.slice(6));
+              if (eventType === "token" && payload.token) {
+                accumulated += payload.token;
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  updated[updated.length - 1] = {
+                    role: "assistant",
+                    content: accumulated,
+                  };
+                  return updated;
+                });
+                setStatusText("");
+              } else if (eventType === "tool_start") {
+                setStatusText(`Calling ${payload.tool}...`);
+              } else if (eventType === "tool_end") {
+                setStatusText("Thinking...");
+              } else if (eventType === "status") {
+                setStatusText(payload.status === "thinking" ? "Thinking..." : "");
+              } else if (eventType === "error") {
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  updated[updated.length - 1] = {
+                    role: "assistant",
+                    content: `Error: ${payload.detail}`,
+                  };
+                  return updated;
+                });
+              }
+            } catch { /* skip malformed data lines */ }
+            eventType = null;
+          }
+        }
+      }
+
+      // If no tokens were streamed (model gave empty response), show fallback
+      if (!accumulated) {
+        setMessages((prev) => {
+          const updated = [...prev];
+          if (updated[updated.length - 1]?.content === "") {
+            updated[updated.length - 1] = {
+              role: "assistant",
+              content: "(No response from model)",
+            };
+          }
+          return updated;
+        });
+      }
+    } catch (err) {
+      if (err.name === "AbortError") {
+        // User stopped generation — keep what we have
+        if (!accumulated) {
+          setMessages((prev) => {
+            const updated = [...prev];
+            if (updated[updated.length - 1]?.content === "") {
+              updated.pop(); // remove empty placeholder
+            }
+            return updated;
+          });
+        }
+      } else {
+        setMessages((prev) => [
+          ...prev.filter((m) => m.content !== ""),
+          { role: "assistant", content: "Failed to connect to the agent." },
+        ]);
+      }
     } finally {
+      abortRef.current = null;
       setLoading(false);
+      setStatusText("");
     }
   };
 
@@ -193,6 +289,7 @@ function App() {
                     <span className="msg-author">Phi-4</span>
                     <div className="msg-text thinking">
                       <span className="dot-pulse"></span>
+                      {statusText && <span className="status-label">{statusText}</span>}
                     </div>
                   </div>
                 </div>
@@ -221,6 +318,11 @@ function App() {
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
             </button>
+            {loading && (
+              <button className="stop-btn" onClick={stopGeneration} title="Stop generating">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+              </button>
+            )}
           </div>
           <p className="disclaimer">
             Phi-4 mini running locally via Ollama. Responses may be inaccurate.
