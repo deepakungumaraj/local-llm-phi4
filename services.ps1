@@ -73,6 +73,8 @@ function Start-Ollama {
         return
     }
     Write-Host "  Starting Ollama..." -ForegroundColor Yellow
+    $env:OLLAMA_NUM_THREADS = "8"       # use all 8 cores for CPU fallback layers
+    $env:OLLAMA_KEEP_ALIVE = "-1"       # keep model loaded permanently (no idle unload)
     Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
     Start-Sleep -Seconds 3
     if (Test-Service $OllamaPort) {
@@ -89,8 +91,8 @@ function Start-AgentServer {
     }
     Write-Host "  Starting Agent Server..." -ForegroundColor Yellow
     $env:PYTHONUTF8 = "1"
-    $env:OLLAMA_MODEL = "qwen2.5:3b"
-    Start-Process "py" -ArgumentList "-m", "uvicorn", "server:app", "--port", "$AgentPort", "--app-dir", "$AgentAppDir" -WindowStyle Hidden
+    $env:OLLAMA_MODEL = "phi4-mini:latest"
+    Start-Process "py" -ArgumentList "-m", "uvicorn", "server:app", "--port", "$AgentPort", "--app-dir", "$AgentAppDir" -WindowStyle Hidden -RedirectStandardOutput "$AgentAppDir\server.log" -RedirectStandardError "$AgentAppDir\server.err"
     $retries = 0
     while ($retries -lt 10) {
         Start-Sleep -Seconds 2

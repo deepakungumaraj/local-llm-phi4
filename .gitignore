@@ -38,3 +38,8 @@ token.txt
 refresh_token.txt
 **/token.txt
 **/refresh_token.txt
+.webui_secret_key
+
+# Server logs (runtime artifacts)
+*.log
+*.err

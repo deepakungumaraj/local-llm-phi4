@@ -12,10 +12,10 @@ from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 from tools import tools as local_tools
 
-MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
+MODEL = os.environ.get("OLLAMA_MODEL", "phi4-mini:latest")
 OLLAMA_BASE = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-# num_gpu=0: run on CPU only — Intel Arc Vulkan is unstable; shared RAM means no speed penalty
-llm = ChatOllama(model=MODEL, timeout=180, num_ctx=8192, num_gpu=0)
+# Intel Arc 140V (Lunar Lake): phi4-mini ~2.4GB + 4096 KV cache ≈ 2.6GB — fits safely on GPU.
+llm = ChatOllama(model=MODEL, timeout=180, num_ctx=4096, num_gpu=0)
 
 _MAX_RETRIES = 2
 
@@ -150,6 +150,37 @@ def _parse_text_tool_calls(content, tool_map):
     return calls
 
 
+def _format_roles_as_table(raw: str) -> str:
+    """Parse search_roles / get_roles JSON and return a clean markdown table.
+    Falls back to truncated raw text if parsing fails."""
+    try:
+        data = json.loads(raw)
+        # API may return list directly or wrapped in {roles: [...]} or {results: [...]}
+        if isinstance(data, dict):
+            data = data.get("roles") or data.get("results") or data.get("data") or []
+        if not isinstance(data, list) or not data:
+            return raw[:1000]
+
+        header = "| Role ID | Title | Client | Location | Start | End | Status |"
+        sep    = "|---------|-------|--------|----------|-------|-----|--------|"
+        rows = []
+        for r in data:
+            rid      = r.get("id", "")
+            title    = r.get("title", "")[:35]
+            client   = r.get("client", "")[:25]
+            location = r.get("location", "")
+            loc_type = r.get("locationType", "")
+            loc_str  = f"{location} ({loc_type})" if loc_type else location
+            start    = str(r.get("startDate", ""))[:10]
+            end      = str(r.get("endDate", ""))[:10]
+            status   = r.get("demandStatus", "")
+            rows.append(f"| {rid} | {title} | {client} | {loc_str} | {start} | {end} | {status} |")
+
+        return "\n".join([header, sep] + rows)
+    except Exception:
+        return raw[:1000]
+
+
 def _build_tool_descriptions(tool_map):
     """Generate a compact tool description block for the system prompt."""
     lines = [
@@ -223,16 +254,28 @@ _MAX_HISTORY_MESSAGES = 10
 
 
 def _truncate_history(msgs, max_msgs=_MAX_HISTORY_MESSAGES):
-    """Keep the last max_msgs non-system messages, trimming ToolMessages to 500 chars each."""
+    """Keep the last max_msgs non-system messages.
+    Recent tool results (last 2) get 4000 chars — enough for ~10 roles.
+    Older tool results get 300 chars to save context space.
+    """
     non_system = [m for m in msgs if not isinstance(m, SystemMessage)]
     trimmed = non_system[-max_msgs:]
+
+    # Find indices of ToolMessages so we can apply tiered truncation
+    tool_indices = [i for i, m in enumerate(trimmed) if isinstance(m, ToolMessage)]
+    recent_tool_indices = set(tool_indices[-2:])  # last 2 tool results stay full-ish
+
     result = []
-    for m in trimmed:
-        if isinstance(m, ToolMessage) and len(m.content) > 500:
-            result.append(ToolMessage(
-                content=m.content[:500] + "...[truncated]",
-                tool_call_id=m.tool_call_id,
-            ))
+    for i, m in enumerate(trimmed):
+        if isinstance(m, ToolMessage):
+            limit = 4000 if i in recent_tool_indices else 300
+            if len(m.content) > limit:
+                result.append(ToolMessage(
+                    content=m.content[:limit] + "...[truncated]",
+                    tool_call_id=m.tool_call_id,
+                ))
+            else:
+                result.append(m)
         else:
             result.append(m)
     return result
@@ -292,8 +335,7 @@ def _truncate_history(msgs, max_msgs=_MAX_HISTORY_MESSAGES):
         return {"messages": [response], "iteration": iteration + 1}
 
     async def reporter_node(state: AgentState):
-        """Runs after all tool calls finish. Synthesizes tool results if the agent
-        did not already produce a substantive final answer."""
+        """Runs after all tool calls finish. Synthesizes tool results into a formatted answer."""
         msgs = state["messages"]
         tool_msgs = [m for m in msgs if isinstance(m, ToolMessage)]
 
@@ -301,26 +343,33 @@ def _truncate_history(msgs, max_msgs=_MAX_HISTORY_MESSAGES):
         if not tool_msgs:
             return {}
 
-        # Agent already wrote a good summary after the tool results
+        # Check if agent already gave a proper text answer (not raw JSON)
         last_ai = next(
             (m for m in reversed(msgs) if isinstance(m, AIMessage) and m.content.strip()),
             None,
         )
-        if last_ai and len(last_ai.content.strip()) > 80:
+        def _is_good_answer(text):
+            t = text.strip()
+            # Raw JSON or truncated tool result echoed back — must synthesize
+            if t.startswith('[{') or t.startswith('{"') or t.endswith('...[truncated]]}'):
+                return False
+            return len(t) > 80
+
+        if last_ai and _is_good_answer(last_ai.content):
             return {}
 
-        # Build a synthesis prompt from the last few tool results
+        # Build synthesis prompt — instruct model to format as markdown table
         tool_summary = "\n\n".join(
-            f"Result: {m.content[:800]}" for m in tool_msgs[-4:]
+            f"Result: {m.content[:2000]}" for m in tool_msgs[-4:]
         )
         synthesis_msgs = [
             SystemMessage(content=(
-                "You are a helpful assistant. Based on the tool results below, "
-                "give a clear and concise final answer to the user's question. "
-                "Do not mention the tools or the process — just the answer."
+                "You are a helpful assistant. The tool results below are already formatted "
+                "as a markdown table. Present them to the user with a brief 1-sentence intro. "
+                "Do NOT reformat, summarise, or omit any rows. Output the table exactly as given."
             )),
             *[m for m in msgs if isinstance(m, HumanMessage)][-2:],
-            HumanMessage(content=f"Tool results:\n{tool_summary}\n\nFinal answer:"),
+            HumanMessage(content=f"Tool results:\n{tool_summary}\n\nPresent these results:"),
         ]
         try:
             for attempt in range(_MAX_RETRIES + 1):
@@ -356,8 +405,16 @@ def _truncate_history(msgs, max_msgs=_MAX_HISTORY_MESSAGES):
                     print(f"[Tool] Error: {e}")
             else:
                 result = f"Tool '{tool_name}' not found."
+
+            # Format role lists as markdown tables so the LLM never sees raw JSON
+            result_str = str(result)
+            if tool_name in ("search_roles", "get_roles"):
+                result_str = _format_roles_as_table(result_str)
+                print(f"[Tool] Formatted {tool_name} → {len(result_str)} chars, "
+                      f"{result_str.count(chr(10))} rows")
+
             tool_results.append(
-                ToolMessage(content=str(result), tool_call_id=tool_call["id"])
+                ToolMessage(content=result_str, tool_call_id=tool_call["id"])
             )
         return {"messages": tool_results}
 

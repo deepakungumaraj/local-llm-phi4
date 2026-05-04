@@ -285,6 +285,43 @@ html, body, #root {
   word-break: break-word;
 }
 
+/* Markdown rendered content — disable pre-wrap so tables don't break */
+.msg-text p, .msg-text ul, .msg-text ol, .msg-text h1, .msg-text h2,
+.msg-text h3, .msg-text blockquote { white-space: normal; }
+
+/* Markdown tables */
+.msg-text table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+  font-size: 13px;
+  white-space: normal;
+}
+.msg-text th, .msg-text td {
+  border: 1px solid #444;
+  padding: 6px 10px;
+  text-align: left;
+}
+.msg-text th {
+  background: #2a2a3a;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.msg-text tr:nth-child(even) { background: rgba(255,255,255,0.03); }
+.msg-text tr:hover { background: rgba(255,255,255,0.07); }
+
+/* Inline code */
+.msg-text code {
+  background: #2a2a3a;
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-size: 13px;
+  font-family: monospace;
+}
+
+/* Bold */
+.msg-text strong { color: #c9d1d9; }
+
 /* ===== Thinking animation ===== */
 .thinking {
   display: flex;

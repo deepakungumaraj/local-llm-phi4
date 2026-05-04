@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import "./App.css";
 
 function App() {
@@ -69,11 +71,17 @@ function App() {
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
 
+    // Resolve the thread ID BEFORE state updates (React state is async —
+    // setConversations/setActiveConv won't be visible in this closure yet)
+    let currentThreadId = conversations.find((c) => c.id === activeConv)?.threadId ?? null;
+    let currentConvId = activeConv;
+
     if (activeConv === null) {
       const id = Date.now();
-      const threadId = crypto.randomUUID();
+      currentThreadId = crypto.randomUUID();
+      currentConvId = id;
       setConversations((prev) => [
-        { id, title: input.slice(0, 40), messages: [], threadId },
+        { id, title: input.slice(0, 40), messages: [], threadId: currentThreadId },
         ...prev,
       ]);
       setActiveConv(id);
@@ -101,7 +109,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: input,
-          thread_id: conversations.find((c) => c.id === activeConv)?.threadId ?? null,
+          thread_id: currentThreadId,
         }),
         signal: controller.signal,
       });
@@ -156,6 +164,13 @@ function App() {
                   };
                   return updated;
                 });
+              } else if (eventType === "done" && payload.thread_id) {
+                // Save the server-assigned thread_id so subsequent messages stay in the same thread
+                setConversations((prev) =>
+                  prev.map((c) =>
+                    c.id === currentConvId ? { ...c, threadId: payload.thread_id } : c
+                  )
+                );
               }
             } catch { /* skip malformed data lines */ }
             eventType = null;
@@ -239,7 +254,7 @@ function App() {
         <div className="sidebar-footer">
           <div className="model-badge">
             <span className="model-dot"></span>
-            qwen2.5:3b
+            phi4-mini
           </div>
         </div>
       </aside>
@@ -281,9 +296,13 @@ function App() {
                   </div>
                   <div className="msg-content">
                     <span className="msg-author">
-                      {msg.role === "user" ? "You" : "Qwen2.5"}
+                      {msg.role === "user" ? "You" : "Phi4-mini"}
                     </span>
-                    <div className="msg-text">{msg.content}</div>
+                    <div className="msg-text">
+                      {msg.role === "assistant"
+                        ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                        : msg.content}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -293,7 +312,7 @@ function App() {
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 017 7h1a1 1 0 110 2h-1v1a7 7 0 01-7 7H10a7 7 0 01-7-7v-1H2a1 1 0 110-2h1a7 7 0 017-7h1V5.73A2 2 0 0112 2zM9.5 13a1.5 1.5 0 100 3 1.5 1.5 0 000-3zm5 0a1.5 1.5 0 100 3 1.5 1.5 0 000-3z"/></svg>
                   </div>
                   <div className="msg-content">
-                    <span className="msg-author">Qwen2.5</span>
+                    <span className="msg-author">Phi4-mini</span>
                     <div className="msg-text thinking">
                       <span className="dot-pulse"></span>
                       {statusText && <span className="status-label">{statusText}</span>}
@@ -332,7 +351,7 @@ function App() {
             )}
           </div>
           <p className="disclaimer">
-            Qwen2.5 3B running locally via Ollama. Responses may be inaccurate.
+            Phi4-mini running locally via Ollama. Responses may be inaccurate.
           </p>
         </div>
       </main>
