@@ -28,8 +28,9 @@ function App() {
       );
     }
     const id = Date.now();
+    const threadId = crypto.randomUUID();
     setConversations((prev) => [
-      { id, title: "New Chat", messages: [] },
+      { id, title: "New Chat", messages: [], threadId },
       ...prev,
     ]);
     setActiveConv(id);
@@ -70,8 +71,9 @@ function App() {
 
     if (activeConv === null) {
       const id = Date.now();
+      const threadId = crypto.randomUUID();
       setConversations((prev) => [
-        { id, title: input.slice(0, 40), messages: [] },
+        { id, title: input.slice(0, 40), messages: [], threadId },
         ...prev,
       ]);
       setActiveConv(id);
@@ -97,7 +99,10 @@ function App() {
       const res = await fetch("http://localhost:8000/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: input }),
+        body: JSON.stringify({
+          message: input,
+          thread_id: conversations.find((c) => c.id === activeConv)?.threadId ?? null,
+        }),
         signal: controller.signal,
       });
 
@@ -135,11 +140,13 @@ function App() {
                 });
                 setStatusText("");
               } else if (eventType === "tool_start") {
-                setStatusText(`Calling ${payload.tool}...`);
+                setStatusText(`🔧 Calling ${payload.tool}...`);
               } else if (eventType === "tool_end") {
                 setStatusText("Thinking...");
               } else if (eventType === "status") {
-                setStatusText(payload.status === "thinking" ? "Thinking..." : "");
+                if (payload.status === "thinking") setStatusText("Thinking...");
+                else if (payload.status === "Summarising...") setStatusText("📝 Summarising...");                else if (payload.status === "Summarising...") setStatusText("📝 Summarising...");
+                else setStatusText(payload.status || "");
               } else if (eventType === "error") {
                 setMessages((prev) => {
                   const updated = [...prev];
@@ -232,7 +239,7 @@ function App() {
         <div className="sidebar-footer">
           <div className="model-badge">
             <span className="model-dot"></span>
-            phi4-mini
+            qwen2.5:3b
           </div>
         </div>
       </aside>
@@ -247,7 +254,7 @@ function App() {
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
           </button>
-          <h1 className="topbar-title">Phi-4 Local Assistant</h1>
+          <h1 className="topbar-title">Local AI Assistant</h1>
         </header>
 
         <div className="chat-area">
@@ -274,7 +281,7 @@ function App() {
                   </div>
                   <div className="msg-content">
                     <span className="msg-author">
-                      {msg.role === "user" ? "You" : "Phi-4"}
+                      {msg.role === "user" ? "You" : "Qwen2.5"}
                     </span>
                     <div className="msg-text">{msg.content}</div>
                   </div>
@@ -286,7 +293,7 @@ function App() {
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 017 7h1a1 1 0 110 2h-1v1a7 7 0 01-7 7H10a7 7 0 01-7-7v-1H2a1 1 0 110-2h1a7 7 0 017-7h1V5.73A2 2 0 0112 2zM9.5 13a1.5 1.5 0 100 3 1.5 1.5 0 000-3zm5 0a1.5 1.5 0 100 3 1.5 1.5 0 000-3z"/></svg>
                   </div>
                   <div className="msg-content">
-                    <span className="msg-author">Phi-4</span>
+                    <span className="msg-author">Qwen2.5</span>
                     <div className="msg-text thinking">
                       <span className="dot-pulse"></span>
                       {statusText && <span className="status-label">{statusText}</span>}
@@ -325,7 +332,7 @@ function App() {
             )}
           </div>
           <p className="disclaimer">
-            Phi-4 mini running locally via Ollama. Responses may be inaccurate.
+            Qwen2.5 3B running locally via Ollama. Responses may be inaccurate.
           </p>
         </div>
       </main>

@@ -3,15 +3,46 @@ import os
 import re
 import uuid
 import asyncio
+import httpx
 from typing import TypedDict, Annotated
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, BaseMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import MemorySaver
 from tools import tools as local_tools
 
 MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
-llm = ChatOllama(model=MODEL, timeout=120, num_ctx=4096)
+OLLAMA_BASE = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+# num_gpu=0: run on CPU only — Intel Arc Vulkan is unstable; shared RAM means no speed penalty
+llm = ChatOllama(model=MODEL, timeout=180, num_ctx=8192, num_gpu=0)
+
+_MAX_RETRIES = 2
+
+
+async def _reset_ollama_runner():
+    """Unload and reload the model to recover from a Vulkan runner crash."""
+    print(f"[Ollama] Runner crashed — unloading {MODEL}...")
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            await client.post(
+                f"{OLLAMA_BASE}/api/generate",
+                json={"model": MODEL, "keep_alive": 0},
+            )
+        except Exception:
+            pass
+    await asyncio.sleep(3)
+    print(f"[Ollama] Reloading {MODEL} (warm-up request)...")
+    async with httpx.AsyncClient(timeout=120) as client:
+        try:
+            await client.post(
+                f"{OLLAMA_BASE}/api/generate",
+                json={"model": MODEL, "prompt": "hi", "stream": False},
+            )
+        except Exception as e:
+            print(f"[Ollama] Warm-up failed: {e}")
+    print(f"[Ollama] Runner recovered.")
+
 
 _INSTRUCTIONS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instructions.md")
 
@@ -120,13 +151,13 @@ def _parse_text_tool_calls(content, tool_map):
 
 
 def _build_tool_descriptions(tool_map):
-    """Generate a tool description block for the system prompt."""
-    lines = ["\n## Tool Definitions\n",
-             "When you need to call a tool, output ONLY a JSON array on a line by itself:",
-             '```',
-             '[{"name": "tool_name", "arguments": {"arg1": "value1"}}]',
-             '```',
-             "Do NOT add any text before or after the JSON. Do NOT simulate tool results.\n"]
+    """Generate a compact tool description block for the system prompt."""
+    lines = [
+        "\n## Tools",
+        'To call a tool, output ONLY this JSON array and nothing else:',
+        '[{"name": "tool_name", "arguments": {"arg1": "val"}}]',
+        "IMPORTANT: Never fabricate or simulate tool results. Stop after the JSON — the system will execute the tool and return the real result.\n",
+    ]
     for name, tool in tool_map.items():
         try:
             if hasattr(tool, "args_schema") and tool.args_schema:
@@ -143,29 +174,71 @@ def _build_tool_descriptions(tool_map):
             schema = {}
         props = schema.get("properties", {})
         required = schema.get("required", [])
-        desc = tool.description.split('\n')[0] if tool.description else ""
+        desc = tool.description.split('\n')[0][:120] if tool.description else ""
         params = []
         for pname, pdef in props.items():
             if pname.startswith("_"):
                 continue
             ptype = pdef.get("type", "string")
-            pdesc = pdef.get("description", "")
-            req = " (required)" if pname in required else " (optional)"
-            params.append(f"    - {pname}: {ptype}{req} — {pdesc}")
-        lines.append(f"### {name}")
-        lines.append(f"{desc}")
-        if params:
-            lines.append("  Parameters:")
-            lines.extend(params)
-        lines.append("")
+            req = "*" if pname in required else ""
+            params.append(f"{pname}{req}:{ptype}")
+        param_str = f" ({', '.join(params)})" if params else ""
+        lines.append(f"- **{name}**{param_str}: {desc}")
     return "\n".join(lines)
+
+
+_MAX_TOOL_ITERATIONS = 8
+
+
+def _clean_tool_args(name, args):
+    """Sanitize tool arguments: remove empty strings, coerce types, fix common LLM mistakes."""
+    if not isinstance(args, dict):
+        return args
+    # Remove keys with empty-string values (LLM often sends level: "", startDate: "")
+    cleaned = {k: v for k, v in args.items() if v != ""}
+    # For search_roles: "location" should not duplicate "country"
+    if name == "search_roles":
+        loc = cleaned.get("location", "")
+        country = cleaned.get("country", "")
+        if loc and loc.upper() == country.upper():
+            del cleaned["location"]  # USA is a country, not a metro city
+        # Coerce page/pageSize to int
+        for k in ("page", "pageSize"):
+            if k in cleaned:
+                try:
+                    cleaned[k] = int(cleaned[k])
+                except (ValueError, TypeError):
+                    del cleaned[k]
+    return cleaned
 
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
+    iteration: int  # counts tool-call rounds; reset per conversation turn
+
+
+# Keep system prompt + last N messages to avoid context overflow.
+# Tool results (search_roles etc.) can be thousands of tokens — truncate aggressively.
+_MAX_HISTORY_MESSAGES = 10
 
 
-def build_agent(extra_tools=None):
+def _truncate_history(msgs, max_msgs=_MAX_HISTORY_MESSAGES):
+    """Keep the last max_msgs non-system messages, trimming ToolMessages to 500 chars each."""
+    non_system = [m for m in msgs if not isinstance(m, SystemMessage)]
+    trimmed = non_system[-max_msgs:]
+    result = []
+    for m in trimmed:
+        if isinstance(m, ToolMessage) and len(m.content) > 500:
+            result.append(ToolMessage(
+                content=m.content[:500] + "...[truncated]",
+                tool_call_id=m.tool_call_id,
+            ))
+        else:
+            result.append(m)
+    return result
+
+
+def build_agent(extra_tools=None):
     all_tools = list(local_tools) + (extra_tools or [])
     tool_map = {t.name: t for t in all_tools}
     base_prompt = _load_system_prompt()
@@ -174,11 +247,31 @@ def build_agent(extra_tools=None):
     print(f"[Agent] System prompt total: {len(system_prompt)} chars, {len(tool_map)} tools")
 
     async def agent_node(state: AgentState):
-        print("\n[Agent] Thinking...")
-        msgs = state["messages"]
-        if not msgs or not isinstance(msgs[0], SystemMessage):
-            msgs = [SystemMessage(content=system_prompt)] + list(msgs)
-        response = await llm.ainvoke(msgs)
+        iteration = state.get("iteration", 0)
+        print(f"\n[Agent] Thinking... (iteration {iteration})")
+        msgs = _truncate_history(state["messages"])
+        msgs = [SystemMessage(content=system_prompt)] + msgs
+        print(f"[Agent] Sending {len(msgs)} messages to LLM")
+
+        # Retry loop: auto-recover from Vulkan runner crashes
+        response = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                response = await llm.ainvoke(msgs)
+                break
+            except Exception as e:
+                err_msg = str(e).lower()
+                is_runner_crash = (
+                    "unexpectedly stopped" in err_msg
+                    or "status code: 500" in err_msg
+                    or "connection refused" in err_msg
+                    or "connectex" in err_msg
+                )
+                if is_runner_crash and attempt < _MAX_RETRIES:
+                    print(f"[Agent] Vulkan runner crash detected (attempt {attempt + 1}), recovering...")
+                    await _reset_ollama_runner()
+                    continue
+                raise
 
         # Debug: log what the model actually returned
         print(f"[Agent] Response content_len={len(response.content) if response.content else 0}")
@@ -196,14 +289,64 @@ def build_agent(extra_tools=None):
                 tool_calls=text_calls,
             )
 
-        return {"messages": [response]}
+        return {"messages": [response], "iteration": iteration + 1}
+
+    async def reporter_node(state: AgentState):
+        """Runs after all tool calls finish. Synthesizes tool results if the agent
+        did not already produce a substantive final answer."""
+        msgs = state["messages"]
+        tool_msgs = [m for m in msgs if isinstance(m, ToolMessage)]
+
+        # No tools were used — agent's response is already the final answer
+        if not tool_msgs:
+            return {}
+
+        # Agent already wrote a good summary after the tool results
+        last_ai = next(
+            (m for m in reversed(msgs) if isinstance(m, AIMessage) and m.content.strip()),
+            None,
+        )
+        if last_ai and len(last_ai.content.strip()) > 80:
+            return {}
+
+        # Build a synthesis prompt from the last few tool results
+        tool_summary = "\n\n".join(
+            f"Result: {m.content[:800]}" for m in tool_msgs[-4:]
+        )
+        synthesis_msgs = [
+            SystemMessage(content=(
+                "You are a helpful assistant. Based on the tool results below, "
+                "give a clear and concise final answer to the user's question. "
+                "Do not mention the tools or the process — just the answer."
+            )),
+            *[m for m in msgs if isinstance(m, HumanMessage)][-2:],
+            HumanMessage(content=f"Tool results:\n{tool_summary}\n\nFinal answer:"),
+        ]
+        try:
+            for attempt in range(_MAX_RETRIES + 1):
+                try:
+                    response = await llm.ainvoke(synthesis_msgs)
+                    break
+                except Exception as e:
+                    err_msg = str(e).lower()
+                    if attempt < _MAX_RETRIES and (
+                        "unexpectedly stopped" in err_msg or "status code: 500" in err_msg
+                    ):
+                        await _reset_ollama_runner()
+                        continue
+                    raise
+            print(f"[Reporter] Synthesized final answer ({len(response.content)} chars)")
+            return {"messages": [AIMessage(content=response.content)]}
+        except Exception as e:
+            print(f"[Reporter] Error: {e}")
+            return {}
 
     async def tool_node(state: AgentState):
         last_message = state["messages"][-1]
         tool_results = []
         for tool_call in last_message.tool_calls:
             tool_name = tool_call["name"]
-            tool_args = tool_call["args"]
+            tool_args = _clean_tool_args(tool_name, tool_call["args"])
             print(f"\n[Tool] Calling: {tool_name} with args: {tool_args}")
             if tool_name in tool_map:
                 try:
@@ -221,17 +364,23 @@ def build_agent(extra_tools=None):
     def should_continue(state: AgentState):
         last_message = state["messages"][-1]
         if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+            tool_rounds = sum(1 for m in state["messages"] if isinstance(m, ToolMessage))
+            if tool_rounds >= _MAX_TOOL_ITERATIONS:
+                print(f"[Agent] Hit max tool iterations ({_MAX_TOOL_ITERATIONS}), going to reporter.")
+                return "report"
             return "call_tool"
-        return END
+        return "report"
 
     graph = StateGraph(AgentState)
     graph.add_node("agent", agent_node)
     graph.add_node("tools", tool_node)
+    graph.add_node("reporter", reporter_node)
     graph.set_entry_point("agent")
     graph.add_conditional_edges(
         "agent",
         should_continue,
-        {"call_tool": "tools", END: END},
+        {"call_tool": "tools", "report": "reporter"},
     )
     graph.add_edge("tools", "agent")
-    return graph.compile()
+    graph.add_edge("reporter", END)
+    return graph.compile(checkpointer=MemorySaver())

@@ -32,3 +32,9 @@ Desktop.ini
 
 # Ollama model files
 *.gguf
+
+# Secrets - never commit auth tokens
+token.txt
+refresh_token.txt
+**/token.txt
+**/refresh_token.txt

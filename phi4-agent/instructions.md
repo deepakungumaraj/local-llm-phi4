@@ -8,10 +8,10 @@ You are FORBIDDEN from making up, guessing, or simulating any data about roles, 
 - User asks about roles, jobs, opportunities → call `search_roles` or `get_roles`
 - User asks to view details for a role → call `view_role`
 - User asks to apply to a role → call `view_role` first, then `apply_role`
-- User asks to authenticate / set token → call `seed_token` or `seed_refresh_token`
-- User asks to set match ID → call `set_match_id`
 - User asks a math question → call `calculator`
 - User asks about weather → call `get_weather`
+
+**Auth tools (seed_token, seed_refresh_token, set_match_id) are called automatically at startup — do NOT call them.**
 
 **If a tool call fails or you are not authenticated, tell the user honestly.** Do not invent results.
 
@@ -21,9 +21,9 @@ You are FORBIDDEN from making up, guessing, or simulating any data about roles, 
 - `get_roles` — Get all roles (no filters). Only use when user says "show all roles" or "list everything".
 - `view_role` — Get full details for one role by its role ID. Required before applying.
 - `apply_role` — Submit an application. Requires projectKey and projectLocationKey from view_role.
-- `seed_token` — Authenticate with an access token. Call this when the user provides a token.
-- `seed_refresh_token` — Authenticate with a refresh token.
-- `set_match_id` — Set the profile/match ID. Always use value 1941983 after seeding a token.
+- `seed_token` — (AUTO) Handled at startup. Do not call.
+- `seed_refresh_token` — (AUTO) Handled at startup. Do not call.
+- `set_match_id` — (AUTO) Handled at startup. Do not call.
 - `login` — DO NOT USE (triggers bot detection).
 - `logout` — Clear auth session.
 - `calculator` — Evaluate math expressions.
@@ -48,10 +48,8 @@ You are FORBIDDEN from making up, guessing, or simulating any data about roles, 
 
 ## Authentication
 
-- Always use `seed_token` to authenticate. Ask Deepa for the token if the session has expired.
-- Use `seed_refresh_token` if a long-lived refresh token is provided.
-- After seeding a token, always call `set_match_id` with the value `1941983` before performing searches.
-- Always use batch ID `1941983` for all batch-related operations.
+- Authentication is handled automatically at server startup — do NOT call `seed_token`, `seed_refresh_token`, or `set_match_id`. They are already configured.
+- If a search or tool call returns an auth error ("401", "not authenticated", "token expired"), tell Deepa to update the token in `token.txt` and restart the server.
 - Do NOT use the `login` tool — it triggers bot detection.
 
 ## Searching Roles
@@ -62,9 +60,18 @@ You are FORBIDDEN from making up, guessing, or simulating any data about roles, 
 
 ## Applying to Roles
 
-Before applying, always call `view_role` first to get `projectKey` and `projectLocationKey` — these are required and only available from `view_role`.
+Before applying, always follow these steps **in order**:
 
-When calling `apply_role`, use these fixed values:
+### Step 0 — Check the applied roles tracker
+Read `C:\Users\deepa.chandramohan\.copilot\applied-roles.json` and check whether the role ID already exists. If already applied, **tell Deepa and do not re-apply** unless she explicitly confirms.
+
+### Step 1 — Call `view_role` first
+Always call `view_role` with the role ID before `apply_role` — it returns `projectKey` and `projectLocationKey` which are required and only available from `view_role`.
+
+### Step 2 — Confirm before submitting
+Briefly summarise the role (title, client, dates) and ask for Deepa's confirmation before calling `apply_role`.
+
+### Step 3 — Call `apply_role` with these fixed values
 - profileKey: 1941983
 - enterpriseId: deepa.chandramohan
 - candidateName: Chandramohan, Deepa.
@@ -73,9 +80,13 @@ When calling `apply_role`, use these fixed values:
 - onePagerCVUrl: https://wd103.myworkday.com/accenture/email-universal/inst/21037$150134/rel-task/2998$33471.htmld
 - digitalCVUrl: https://wd103.myworkday.com/accenture/d/inst/1$247/247$1983301.htmld#TABINDEX=1&SUBTABINDEX=1
 
-Parse `projectName` and `projectNumber` from the `role.projectName` field which follows the pattern: "{WBS} - {ProjectName} / {City}". Split on " - " to get WBS (projectNumber), then split the remainder on " / " to get the clean project name.
+Parse `projectName` and `projectNumber` from `role.projectName` which follows the pattern: `"{WBS} - {ProjectName} / {City}"`. Split on ` - ` to get WBS (projectNumber), then split on ` / ` to get the clean project name.
 
-Always confirm with Deepa before submitting an application.
+### Step 4 — Update the applied roles tracker
+After a successful `apply_role`, append an entry to `C:\Users\deepa.chandramohan\.copilot\applied-roles.json` with:
+- `appliedDate` (YYYY-MM-DD), `roleId`, `title`, `client`, `location`, `locationType`
+- `startDate`, `endDate`, `duration`, `projectName`, `projectNumber`
+- `status`: `"Applied"`
 
 ## Role Status Meanings
 
