@@ -12,9 +12,10 @@ from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 from tools import tools as local_tools
 
-MODEL = os.environ.get("OLLAMA_MODEL", "phi4-mini:latest")
+MODEL = os.environ.get("OLLAMA_MODEL", "phi4-mini-reasoning:latest")
 OLLAMA_BASE = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-# Intel Arc 140V (Lunar Lake): phi4-mini ~2.4GB + 4096 KV cache ≈ 2.6GB — fits safely on GPU.
+# phi4-mini-reasoning: specialized for multi-step reasoning and structured tool calls
+# ~2.4GB + 4096 KV cache. Better at instruction following and tool-call sequencing than base phi4-mini.
 llm = ChatOllama(model=MODEL, timeout=180, num_ctx=4096, num_gpu=0)
 
 _MAX_RETRIES = 2
