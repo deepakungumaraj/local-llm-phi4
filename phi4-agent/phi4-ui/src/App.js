@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import TracePanel from "./TracePanel";
 import RoleCard from "./RoleCard";
+import DetailedRoleCard from "./DetailedRoleCard";
 import { parseRoleContent } from "./roleParser";
 import "./App.css";
 
@@ -169,7 +170,6 @@ function App() {
     setInput("");
     setLoading(true);
     setStatusText("Thinking...");
-    setTraces([]);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -189,9 +189,7 @@ function App() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-
-      // Add a placeholder assistant message for streaming tokens into
-      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+      let assistantInserted = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -211,6 +209,10 @@ function App() {
               if (eventType === "token" && payload.token) {
                 accumulated += payload.token;
                 setMessages((prev) => {
+                  if (!assistantInserted) {
+                    assistantInserted = true;
+                    return [...prev, { role: "assistant", content: accumulated }];
+                  }
                   const updated = [...prev];
                   updated[updated.length - 1] = {
                     role: "assistant",
@@ -231,12 +233,14 @@ function App() {
                 else if (payload.status === "Summarising...") setStatusText("📝 Summarising...");                else if (payload.status === "Summarising...") setStatusText("📝 Summarising...");
                 else setStatusText(payload.status || "");
               } else if (eventType === "error") {
+                const errMsg = `Error: ${payload.detail}`;
                 setMessages((prev) => {
+                  if (!assistantInserted) {
+                    assistantInserted = true;
+                    return [...prev, { role: "assistant", content: errMsg }];
+                  }
                   const updated = [...prev];
-                  updated[updated.length - 1] = {
-                    role: "assistant",
-                    content: `Error: ${payload.detail}`,
-                  };
+                  updated[updated.length - 1] = { role: "assistant", content: errMsg };
                   return updated;
                 });
               } else if (eventType === "done" && payload.thread_id) {
@@ -255,29 +259,14 @@ function App() {
 
       // If no tokens were streamed (model gave empty response), show fallback
       if (!accumulated) {
-        setMessages((prev) => {
-          const updated = [...prev];
-          if (updated[updated.length - 1]?.content === "") {
-            updated[updated.length - 1] = {
-              role: "assistant",
-              content: "(No response from model)",
-            };
-          }
-          return updated;
-        });
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: "(No response from model)" },
+        ]);
       }
     } catch (err) {
       if (err.name === "AbortError") {
-        // User stopped generation — keep what we have
-        if (!accumulated) {
-          setMessages((prev) => {
-            const updated = [...prev];
-            if (updated[updated.length - 1]?.content === "") {
-              updated.pop(); // remove empty placeholder
-            }
-            return updated;
-          });
-        }
+        // User stopped generation — keep what we have, nothing to clean up
       } else {
         setMessages((prev) => [
           ...prev.filter((m) => m.content !== ""),
@@ -397,8 +386,25 @@ function App() {
                         <>
                           {(() => {
                             const parsed = parseRoleContent(msg.content);
+                            
+                            // Render detailed role view if available
+                            if (parsed.detailedRole) {
+                              return (
+                                <DetailedRoleCard 
+                                  role={parsed.detailedRole} 
+                                  onApply={handleRoleApply}
+                                />
+                              );
+                            }
+                            
+                            // Otherwise render standard content + role cards
                             return (
                               <>
+                                {parsed.cleanContent && (
+                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                    {parsed.cleanContent}
+                                  </ReactMarkdown>
+                                )}
                                 {parsed.roles && parsed.roles.length > 0 && (
                                   <div className="role-cards-container">
                                     {parsed.roles.map((role, idx) => (
@@ -410,11 +416,6 @@ function App() {
                                       />
                                     ))}
                                   </div>
-                                )}
-                                {parsed.cleanContent && (
-                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                    {parsed.cleanContent}
-                                  </ReactMarkdown>
                                 )}
                               </>
                             );

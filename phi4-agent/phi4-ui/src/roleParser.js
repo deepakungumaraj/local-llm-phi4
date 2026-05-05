@@ -183,11 +183,28 @@ function extractRoles(table) {
 
 /**
  * Check if content contains role data and extract it
- * Returns { hasRoles: boolean, roles: array|null, cleanContent: string }
+ * Returns { hasRoles: boolean, roles: array|null, cleanContent: string, detailedRole: object|null }
  */
 export function parseRoleContent(content) {
   if (!content || typeof content !== "string") {
-    return { hasRoles: false, roles: null, cleanContent: content };
+    return { hasRoles: false, roles: null, cleanContent: content, detailedRole: null };
+  }
+
+  // Check for detailed role view (structured JSON from view_role)
+  if (content.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(content);
+      if (parsed._type === "detailed_role_view" && parsed.role) {
+        return {
+          hasRoles: false,
+          roles: null,
+          cleanContent: "",
+          detailedRole: parsed.role,
+        };
+      }
+    } catch (e) {
+      // Not valid JSON, continue with normal parsing
+    }
   }
 
   // First try markdown table format
@@ -201,32 +218,20 @@ export function parseRoleContent(content) {
 
   // Remove the table from content if roles were found
   let cleanContent = content;
-  if (table) {
-    // Remove markdown tables for a cleaner display
-    cleanContent = content
-      .replace(/\|(.+)\|\n\|[\s\-:|\s]+\|(\n\|.+\|)*/g, "")
-      .trim();
-  } else if (roles) {
-    // Remove role-specific lines for text-based format
+  if (roles && roles.length > 0) {
+    // Strip all pipe-table lines (header, separator, rows) regardless of exact format
     cleanContent = content
       .split("\n")
       .filter((line) => {
-        const lowerLine = line.toLowerCase();
-        return !(
-          lowerLine.includes("role id") ||
-          lowerLine.includes("title") ||
-          lowerLine.includes("company") ||
-          lowerLine.includes("location") ||
-          lowerLine.includes("start date") ||
-          lowerLine.includes("end date") ||
-          lowerLine.includes("duration") ||
-          lowerLine.includes("industry") ||
-          lowerLine.includes("demand") ||
-          lowerLine.includes("status") ||
-          (lowerLine.trim() === "" && line === content.split("\n")[0])
-        );
+        const t = line.trim();
+        // Drop lines that are table rows: start with | or contain multiple |
+        if (t.startsWith("|")) return false;
+        // Drop lines that are purely pipe/dash separators
+        if (/^[\|\s\-:]+$/.test(t) && t.includes("|")) return false;
+        return true;
       })
       .join("\n")
+      .replace(/\n{3,}/g, "\n\n")  // collapse multiple blank lines
       .trim();
   }
 
@@ -234,6 +239,7 @@ export function parseRoleContent(content) {
     hasRoles: !!roles,
     roles: roles,
     cleanContent: cleanContent,
+    detailedRole: null,
   };
 }
 

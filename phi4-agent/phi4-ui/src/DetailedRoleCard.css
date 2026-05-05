@@ -1,0 +1,256 @@
+.detailed-role-card {
+  background: linear-gradient(135deg, #1a1f2e 0%, #0f1419 100%);
+  border: 2px solid #00d4ff;
+  border-radius: 12px;
+  padding: 24px;
+  margin: 20px 0;
+  box-shadow: 0 8px 32px rgba(0, 212, 255, 0.15);
+  max-width: 900px;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.drc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid rgba(0, 212, 255, 0.2);
+}
+
+.drc-title-section {
+  flex: 1;
+}
+
+.drc-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 0 0 8px 0;
+  letter-spacing: -0.5px;
+}
+
+.drc-role-id {
+  font-size: 14px;
+  color: #00d4ff;
+  margin: 0;
+  font-weight: 500;
+}
+
+.drc-status-badge {
+  display: inline-block;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.drc-status-badge[data-status="open - new"],
+.drc-status-badge[data-status="open - need project feedback"] {
+  background: rgba(0, 212, 255, 0.1);
+  color: #00d4ff;
+  border: 1px solid #00d4ff;
+}
+
+.drc-status-badge[data-status="open - in process"],
+.drc-status-badge[data-status="open - confirming candidate"] {
+  background: rgba(255, 182, 0, 0.1);
+  color: #ffb600;
+  border: 1px solid #ffb600;
+}
+
+.drc-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 16px;
+  background: rgba(0, 212, 255, 0.05);
+  border-radius: 8px;
+}
+
+.drc-grid-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.drc-label {
+  font-size: 12px;
+  color: #888;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.drc-value {
+  font-size: 15px;
+  color: #ffffff;
+  font-weight: 500;
+}
+
+.drc-sections {
+  margin-bottom: 24px;
+}
+
+.drc-section {
+  margin-bottom: 20px;
+  padding: 16px;
+  background: rgba(0, 212, 255, 0.02);
+  border-left: 4px solid #00d4ff;
+  border-radius: 6px;
+}
+
+.drc-section-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #00d4ff;
+  margin: 0 0 12px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.drc-section-content {
+  position: relative;
+}
+
+.drc-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #e0e0e0;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.drc-text.collapsed {
+  max-height: 120px;
+  overflow: hidden;
+  position: relative;
+}
+
+.drc-text.collapsed::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  background: linear-gradient(transparent, rgba(15, 20, 25, 0.9));
+}
+
+.drc-see-more-btn {
+  margin-top: 10px;
+  padding: 8px 16px;
+  background: transparent;
+  border: 1px solid #00d4ff;
+  color: #00d4ff;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.drc-see-more-btn:hover {
+  background: rgba(0, 212, 255, 0.1);
+  transform: translateY(-1px);
+}
+
+.drc-details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.drc-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 6px;
+}
+
+.drc-detail-label {
+  font-size: 11px;
+  color: #888;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.drc-detail-value {
+  font-size: 14px;
+  color: #ffffff;
+  font-weight: 500;
+}
+
+.drc-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(0, 212, 255, 0.2);
+}
+
+.drc-apply-btn {
+  flex: 1;
+  padding: 14px 24px;
+  background: linear-gradient(135deg, #00d4ff 0%, #00a8cc 100%);
+  color: #000;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.drc-apply-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 212, 255, 0.3);
+}
+
+.drc-apply-btn:active {
+  transform: translateY(0);
+}
+
+@media (max-width: 768px) {
+  .detailed-role-card {
+    padding: 16px;
+  }
+
+  .drc-title {
+    font-size: 22px;
+  }
+
+  .drc-header {
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .drc-quick-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .drc-details-grid {
+    grid-template-columns: 1fr;
+  }
+}

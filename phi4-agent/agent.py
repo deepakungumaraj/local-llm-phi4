@@ -382,6 +382,36 @@ def build_agent(extra_tools=None):
             )
             return {"messages": [AIMessage(content=final_text)]}
 
+        # For view_role, bypass LLM and emit structured role data.
+        # view_role can come as raw JSON or MCP text blocks wrapping JSON.
+        if last_tool_msg.startswith("{") or last_tool_msg.startswith("["):
+            try:
+                data = json.loads(last_tool_msg)
+
+                # Unwrap MCP content blocks: [{"type":"text","text":"{...}"}]
+                if (
+                    isinstance(data, list)
+                    and data
+                    and isinstance(data[0], dict)
+                    and data[0].get("type") == "text"
+                ):
+                    joined_text = "\n".join(
+                        str(item.get("text", ""))
+                        for item in data
+                        if isinstance(item, dict) and item.get("type") == "text"
+                    ).strip()
+                    if joined_text:
+                        data = json.loads(joined_text)
+
+                role = data.get("role") if isinstance(data, dict) else None
+                role = role or (data if isinstance(data, dict) else None)
+                if isinstance(role, dict) and role.get("id"):
+                    role_json = json.dumps({"_type": "detailed_role_view", "role": role})
+                    print(f"[Reporter] Bypassed LLM for view_role ({len(role_json)} chars)")
+                    return {"messages": [AIMessage(content=role_json)]}
+            except (json.JSONDecodeError, Exception):
+                pass
+
         # Check if agent already gave a proper text answer (not raw JSON)
         last_ai = next(
             (m for m in reversed(msgs) if isinstance(m, AIMessage) and m.content.strip()),

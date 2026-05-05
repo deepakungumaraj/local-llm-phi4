@@ -114,7 +114,13 @@ async def lifespan(app):
     if mcp_tools:
         await _auto_seed_auth(mcp_tools)
 
-    app.state.agent = build_agent(extra_tools=mcp_tools if mcp_tools else None)
+    try:
+        app.state.agent = build_agent(extra_tools=mcp_tools if mcp_tools else None)
+    except Exception as e:
+        print(f"[ERROR] Failed to build agent: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
     app.state.mcp_tool_map = {t.name: t for t in mcp_tools}
 
     # Warm up the model so first user request doesn't wait for disk load
@@ -279,10 +285,20 @@ def _format_apply_result(content: str, role_id, title: str, client: str) -> str:
         return f"✅ Application submitted for Role {role_id}.\n\n{content}"
 
     data = parsed.get("data") or {}
-    # Success can be at top level OR nested under data
-    is_success = parsed.get("success") or (isinstance(data, dict) and data.get("success"))
 
-    steps = data.get("steps", []) if isinstance(data, dict) else []
+    # Steps can be at top level OR nested under data
+    steps = parsed.get("steps") or (data.get("steps", []) if isinstance(data, dict) else [])
+
+    # Success: explicit flag at top level, under data, all steps passed, or message says so
+    top_message = parsed.get("message", "")
+    all_steps_pass = bool(steps) and all(s.get("success") for s in steps)
+    is_success = (
+        parsed.get("success")
+        or (isinstance(data, dict) and data.get("success"))
+        or all_steps_pass
+        or "successfully" in top_message.lower()
+    )
+
     step_lines = "\n".join(
         f"{'✅' if s.get('success') else '❌'} {s.get('step', '')}: {s.get('message', '')}"
         for s in steps
@@ -296,7 +312,7 @@ def _format_apply_result(content: str, role_id, title: str, client: str) -> str:
 
     if steps:
         # Partial: some steps succeeded (e.g. email sent but indicator failed)
-        partial_msg = data.get("message", "") if isinstance(data, dict) else ""
+        partial_msg = (data.get("message", "") if isinstance(data, dict) else "") or top_message
         return f"⚠️ **Application partially submitted — Role {role_id}: {title} at {client}**\n\n{step_lines}\n\n{partial_msg}"
 
     # Outright failure (validation error, auth error, etc.)
