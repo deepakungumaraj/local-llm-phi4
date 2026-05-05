@@ -91,6 +91,11 @@
   font-size: 11px;
 }
 
+.trace-json-line {
+  align-items: flex-start;
+  white-space: normal;
+}
+
 .trace-line:hover {
   background: var(--bg-hover);
 }
@@ -175,6 +180,29 @@
 }
 
 .trace-result-text {
+  color: var(--text-secondary);
+}
+
+.trace-details {
+  width: 100%;
+}
+
+.trace-summary {
+  color: var(--accent);
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+}
+
+.trace-json-block {
+  margin: 6px 0 0;
+  padding: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: auto;
+  max-height: 220px;
+  white-space: pre;
   color: var(--text-secondary);
 }
 

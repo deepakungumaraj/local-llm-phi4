@@ -158,9 +158,21 @@ _DIGITAL_CV_URL = "https://wd103.myworkday.com/accenture/d/inst/1$247/247$198330
 
 _CONFIRM_WORDS = {"yes", "confirm", "proceed", "go ahead", "do it", "apply", "submit", "ok", "sure", "yep", "yeah"}
 
+# Regex: "apply for role 6120691" or "apply to role 6120691"
+_APPLY_ROLE_RE = re.compile(
+    r'\bapply\b.{0,30}\brole[:\s#]*(?:id\s*[:#]?\s*)?(\d{5,8})\b',
+    re.IGNORECASE,
+)
+
 
 def _is_confirmation(text: str) -> bool:
     return text.strip().lower().rstrip("!.") in _CONFIRM_WORDS
+
+
+def _extract_explicit_apply_role_id(text: str) -> str | None:
+    """Return role ID if the message is an explicit 'apply for role XXXXXXX' command."""
+    m = _APPLY_ROLE_RE.search(text)
+    return m.group(1) if m else None
 
 
 def _fmt_date(date_str: str) -> str:
@@ -251,11 +263,13 @@ def _get_pending_apply(agent, thread_id: str) -> dict | None:
 def _format_apply_result(content: str, role_id, title: str, client: str) -> str:
     """Format apply_role response into a human-readable message.
 
-    Handles three cases from applyRole.ts:
-    - success=true  → all steps passed
+    Handles cases from applyRole.ts:
+    - top-level success=true  → all steps passed
+    - data.success=true       → success nested under data
     - success=false + data.steps → partial success (some steps failed)
     - success=false + error      → outright failure (validation / auth error)
     """
+    print(f"[Apply] raw result ({len(content)} chars): {content[:500]}")
     try:
         parsed = json.loads(content)
     except (json.JSONDecodeError, Exception):
@@ -264,18 +278,25 @@ def _format_apply_result(content: str, role_id, title: str, client: str) -> str:
     if not isinstance(parsed, dict):
         return f"✅ Application submitted for Role {role_id}.\n\n{content}"
 
-    steps = parsed.get("data", {}).get("steps", [])
+    data = parsed.get("data") or {}
+    # Success can be at top level OR nested under data
+    is_success = parsed.get("success") or (isinstance(data, dict) and data.get("success"))
+
+    steps = data.get("steps", []) if isinstance(data, dict) else []
     step_lines = "\n".join(
-        f"{'✅' if s.get('success') else '❌'} {s['step']}: {s['message']}"
+        f"{'✅' if s.get('success') else '❌'} {s.get('step', '')}: {s.get('message', '')}"
         for s in steps
     )
 
-    if parsed.get("success"):
-        return f"✅ **Application submitted — Role {role_id}: {title} at {client}**\n\n{step_lines}"
+    if is_success:
+        result = f"✅ **Application submitted — Role {role_id}: {title} at {client}**"
+        if step_lines:
+            result += f"\n\n{step_lines}"
+        return result
 
     if steps:
         # Partial: some steps succeeded (e.g. email sent but indicator failed)
-        partial_msg = parsed.get("data", {}).get("message", "")
+        partial_msg = data.get("message", "") if isinstance(data, dict) else ""
         return f"⚠️ **Application partially submitted — Role {role_id}: {title} at {client}**\n\n{step_lines}\n\n{partial_msg}"
 
     # Outright failure (validation error, auth error, etc.)
@@ -336,9 +357,11 @@ async def _view_and_apply_generator(role_id: str, thread_id: str, tool_map: dict
             return
 
         yield {"event": "status", "data": json.dumps({"status": f"Looking up role {role_id}..."})}
+        yield {"event": "trace", "data": json.dumps({"node": "tool", "tool": "view_role", "args": {"roleId": role_id}, "ts": time.time()})}
         print(f"[Apply] Calling view_role for role_id={role_id}")
         view_result = await view_tool.ainvoke({"roleId": str(role_id)})
         view_content = _extract_tool_content(view_result)
+        yield {"event": "trace", "data": json.dumps({"node": "tool_end", "tool": "view_role", "result": view_content[:2000], "ts": time.time()})}
 
         try:
             parsed = json.loads(view_content)
@@ -357,9 +380,11 @@ async def _view_and_apply_generator(role_id: str, thread_id: str, tool_map: dict
         client = apply_params.get("clientName", "")
 
         yield {"event": "status", "data": json.dumps({"status": f"Applying for {title}..."})}
+        yield {"event": "trace", "data": json.dumps({"node": "tool", "tool": "apply_role", "args": apply_params, "ts": time.time()})}
         print(f"[Apply] Calling apply_role for role={role_id} proj={apply_params['projectKey']}")
         apply_result = await apply_tool.ainvoke(apply_params)
         content = _extract_tool_content(apply_result)
+        yield {"event": "trace", "data": json.dumps({"node": "tool_end", "tool": "apply_role", "result": content[:2000], "ts": time.time()})}
 
         msg = _format_apply_result(content, role_id, title, client)
         yield {"event": "token", "data": json.dumps({"token": msg})}
@@ -446,6 +471,14 @@ async def chat_stream(request: ChatRequest):
         print(f"[Bypass] JWT detected in message — re-seeding auth")
         return EventSourceResponse(_token_update_generator(token, thread_id))
 
+    # Intercept explicit "apply for role XXXXXXXX" commands directly — no LLM needed
+    explicit_role_id = _extract_explicit_apply_role_id(message)
+    if explicit_role_id:
+        print(f"[Bypass] Explicit apply command for role={explicit_role_id}")
+        return EventSourceResponse(
+            _view_and_apply_generator(explicit_role_id, thread_id, app.state.mcp_tool_map)
+        )
+
     # Bypass the LLM entirely when confirming — read view_role result from state and apply directly
     if _is_confirmation(message):
         print(f"[Bypass] Confirmation detected: '{message}' thread={thread_id}")
@@ -467,6 +500,8 @@ async def chat_stream(request: ChatRequest):
         try:
             yield {"event": "status", "data": json.dumps({"status": "thinking"})}
             agent_token_buffer = []
+            reporter_streamed_tokens = False
+            tool_used_in_turn = False
 
             async for event in app.state.agent.astream_events(
                 {"messages": [HumanMessage(content=message)]},
@@ -485,6 +520,7 @@ async def chat_stream(request: ChatRequest):
                         agent_token_buffer.append(chunk.content)
                     elif node == "reporter":
                         # Reporter tokens are always the clean final answer — stream immediately
+                        reporter_streamed_tokens = True
                         yield {"event": "token", "data": json.dumps({"token": chunk.content})}
 
                 elif kind == "on_chain_end" and node == "agent":
@@ -492,18 +528,40 @@ async def chat_stream(request: ChatRequest):
                     if isinstance(output, dict):
                         output_msgs = output.get("messages", [])
                         has_tool_calls = output_msgs and getattr(output_msgs[-1], "tool_calls", None)
+                        used_tools = any(
+                            hasattr(m, "tool_call_id") or m.__class__.__name__ == "ToolMessage"
+                            for m in output_msgs
+                        )
                         if has_tool_calls:
                             # Discard buffer — it contains raw JSON tool call text
                             agent_token_buffer.clear()
-                        else:
+                        elif not tool_used_in_turn and not used_tools:
                             # No tool calls — agent answered directly, flush buffer
                             for token in agent_token_buffer:
                                 yield {"event": "token", "data": json.dumps({"token": token})}
                             agent_token_buffer.clear()
+                        else:
+                            # Tool results exist in this turn, so reporter will produce final output.
+                            agent_token_buffer.clear()
+
+                elif kind == "on_chain_end" and node == "reporter":
+                    # If reporter returned a direct AIMessage (no model token stream),
+                    # emit it once so the UI still receives the final synthesized/table answer.
+                    if reporter_streamed_tokens:
+                        continue
+                    output = event.get("data", {}).get("output", {})
+                    if isinstance(output, dict):
+                        output_msgs = output.get("messages", [])
+                        if output_msgs:
+                            last = output_msgs[-1]
+                            content = getattr(last, "content", "")
+                            if content:
+                                yield {"event": "token", "data": json.dumps({"token": content})}
 
                 elif kind == "on_tool_start":
                     name = event.get("name", "unknown")
                     tool_input = event.get("data", {}).get("input", {})
+                    tool_used_in_turn = True
                     yield {"event": "tool_start", "data": json.dumps({"tool": name})}
                     # Emit structured trace event per the demo plan
                     yield {"event": "trace", "data": json.dumps({

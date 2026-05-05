@@ -154,7 +154,29 @@ def _format_roles_as_table(raw: str) -> str:
     Falls back to truncated raw text if parsing fails."""
     try:
         data = json.loads(raw)
-        # API may return list directly or wrapped in {roles: [...]} or {results: [...]}
+
+        # MCP tools can return content blocks like:
+        # [{"type": "text", "text": "{ \"roles\": [...] }"}]
+        # Unwrap text payload before normal role extraction.
+        if (
+            isinstance(data, list)
+            and data
+            and isinstance(data[0], dict)
+            and "type" in data[0]
+            and "text" in data[0]
+        ):
+            joined_text = "\n".join(
+                str(item.get("text", ""))
+                for item in data
+                if isinstance(item, dict) and item.get("type") == "text"
+            ).strip()
+            if joined_text:
+                try:
+                    data = json.loads(joined_text)
+                except Exception:
+                    return joined_text[:4000]
+
+        # API may return list directly or wrapped in {roles: [...]} or {results: [...]}.
         if isinstance(data, dict):
             data = data.get("roles") or data.get("results") or data.get("data") or []
         if not isinstance(data, list) or not data:
@@ -165,8 +187,8 @@ def _format_roles_as_table(raw: str) -> str:
         rows = []
         for r in data:
             rid      = r.get("id", "")
-            title    = r.get("title", "")[:35]
-            client   = r.get("client", "")[:25]
+            title    = r.get("title", "")
+            client   = r.get("client", "")
             location = r.get("location", "")
             loc_type = r.get("locationType", "")
             loc_str  = f"{location} ({loc_type})" if loc_type else location
@@ -235,13 +257,16 @@ def _clean_tool_args(name, args):
         country = cleaned.get("country", "")
         if loc and loc.upper() == country.upper():
             del cleaned["location"]  # USA is a country, not a metro city
-        # Coerce page/pageSize to int
-        for k in ("page", "pageSize"):
-            if k in cleaned:
-                try:
-                    cleaned[k] = int(cleaned[k])
-                except (ValueError, TypeError):
-                    del cleaned[k]
+        # Coerce page/pageSize to int and set default pageSize
+            for k in ("page", "pageSize"):
+                if k in cleaned:
+                    try:
+                        cleaned[k] = int(cleaned[k])
+                    except (ValueError, TypeError):
+                        del cleaned[k]
+            # CRITICAL: Always use pageSize: 10 if not provided (otherwise API returns only 1 role)
+            if "pageSize" not in cleaned:
+                cleaned["pageSize"] = 10
     return cleaned
 
 
@@ -347,6 +372,16 @@ def build_agent(extra_tools=None):
         if not tool_msgs:
             return {}
 
+        # For role searches, bypass LLM summarization and return the exact table.
+        # This guarantees we never collapse 10 rows down to a single role.
+        last_tool_msg = tool_msgs[-1].content.strip() if tool_msgs else ""
+        if "| Role ID |" in last_tool_msg:
+            final_text = (
+                "Here are the roles I found:\n\n"
+                f"{last_tool_msg}"
+            )
+            return {"messages": [AIMessage(content=final_text)]}
+
         # Check if agent already gave a proper text answer (not raw JSON)
         last_ai = next(
             (m for m in reversed(msgs) if isinstance(m, AIMessage) and m.content.strip()),
@@ -411,7 +446,19 @@ def build_agent(extra_tools=None):
                 result = f"Tool '{tool_name}' not found."
 
             # Format role lists as markdown tables so the LLM never sees raw JSON
-            result_str = str(result)
+            # MCP tools may return list-of-content-blocks like:
+            # [{"type": "text", "text": "...json..."}] — extract the text payload first.
+            if isinstance(result, list):
+                text_parts = []
+                for item in result:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        text_parts.append(str(item.get("text", "")))
+                    else:
+                        text_parts.append(str(item))
+                result_str = "\n".join([p for p in text_parts if p]).strip()
+            else:
+                result_str = str(result)
+
             if tool_name in ("search_roles", "get_roles"):
                 result_str = _format_roles_as_table(result_str)
                 print(f"[Tool] Formatted {tool_name} → {len(result_str)} chars, "

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import "./TracePanel.css";
 
 function TracePanel({ traces, isOpen, onToggle }) {
@@ -11,23 +11,27 @@ function TracePanel({ traces, isOpen, onToggle }) {
     }
   }, [traces]);
 
-  const formatValue = (val) => {
-    if (typeof val === "string") return val;
-    if (typeof val === "number") return val.toString();
-    if (typeof val === "boolean") return val ? "true" : "false";
-    if (typeof val === "object") {
-      if (Array.isArray(val)) {
-        return val.length > 0 ? `[${val.length} items]` : "[]";
-      }
-      return JSON.stringify(val).slice(0, 100);
-    }
-    return String(val);
-  };
-
   const formatElapsed = (startTs, endTs) => {
     const elapsed = (endTs - startTs) * 1000; // convert to ms
     if (elapsed < 1000) return `${elapsed.toFixed(0)}ms`;
     return `${(elapsed / 1000).toFixed(2)}s`;
+  };
+
+  const toPrettyJson = (value) => {
+    if (value === undefined || value === null) return "null";
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value);
+        return JSON.stringify(parsed, null, 2);
+      } catch {
+        return value;
+      }
+    }
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
   };
 
   const renderTraceLines = () => {
@@ -59,21 +63,16 @@ function TracePanel({ traces, isOpen, onToggle }) {
           </div>
         );
 
-        // Render arguments as nested tree
-        if (trace.args && typeof trace.args === "object") {
-          const argKeys = Object.keys(trace.args);
-          argKeys.forEach((key, argIdx) => {
-            const isLast = argIdx === argKeys.length - 1;
-            const connector = isLast ? "└─" : "├─";
-            lines.push(
-              <div key={`${idx}-arg-${key}`} className="trace-line trace-arg">
-                <span className="trace-indent">{connector}</span>
-                <span className="trace-key">{key}:</span>
-                <span className="trace-value">{formatValue(trace.args[key])}</span>
-              </div>
-            );
-          });
-        }
+        // Render request payload as collapsible JSON
+        lines.push(
+          <div key={`${idx}-request`} className="trace-line trace-json-line">
+            <span className="trace-indent">└─</span>
+            <details className="trace-details">
+              <summary className="trace-summary">request</summary>
+              <pre className="trace-json-block"><code>{toPrettyJson(trace.args || {})}</code></pre>
+            </details>
+          </div>
+        );
       } else if (trace.node === "tool_end") {
         const toolStart = toolStack.pop();
         const elapsed = toolStart
@@ -88,31 +87,16 @@ function TracePanel({ traces, isOpen, onToggle }) {
           </div>
         );
 
-        // Show result summary if available
-        if (trace.result) {
-          const resultStr =
-            typeof trace.result === "string"
-              ? trace.result
-              : JSON.stringify(trace.result);
-          const resultLines = resultStr.split("\n").slice(0, 3);
-          resultLines.forEach((line, lineIdx) => {
-            const isLast = lineIdx === resultLines.length - 1;
-            const truncated =
-              resultStr.split("\n").length > 3 && isLast ? "..." : "";
-            lines.push(
-              <div
-                key={`${idx}-result-${lineIdx}`}
-                className="trace-line trace-result"
-              >
-                <span className="trace-indent">└─</span>
-                <span className="trace-result-text">
-                  {line.slice(0, 60)}
-                  {truncated}
-                </span>
-              </div>
-            );
-          });
-        }
+        // Render full response payload as collapsible JSON/text
+        lines.push(
+          <div key={`${idx}-response`} className="trace-line trace-json-line">
+            <span className="trace-indent">└─</span>
+            <details className="trace-details">
+              <summary className="trace-summary">response</summary>
+              <pre className="trace-json-block"><code>{toPrettyJson(trace.result)}</code></pre>
+            </details>
+          </div>
+        );
       } else if (trace.node === "reporter") {
         lines.push(
           <div key={idx} className="trace-line trace-reporter">

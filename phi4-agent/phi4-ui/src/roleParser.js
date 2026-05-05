@@ -51,12 +51,13 @@ function parseTextBasedRole(text) {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
+    const normalizedLine = line.replace(/\*\*/g, "");
     
     // Skip empty lines and question prompts
-    if (!line || line.includes("?")) continue;
+    if (!line || normalizedLine.includes("?")) continue;
 
     // Look for role ID line (start of a new role)
-    if (line.match(/^Role ID:\s*\d+/i)) {
+    if (normalizedLine.match(/^(?:\d+\.\s*)?Role ID\s*:\s*\d+/i)) {
       // Save previous role if it has content
       if (Object.keys(currentRole).length > 1) {
         roles.push(currentRole);
@@ -66,10 +67,15 @@ function parseTextBasedRole(text) {
     }
 
     // Parse key-value pairs
-    const colonIndex = line.indexOf(":");
+    const colonIndex = normalizedLine.indexOf(":");
     if (colonIndex > 0) {
-      const key = line.substring(0, colonIndex).trim().toLowerCase();
-      const value = line.substring(colonIndex + 1).trim();
+      const key = normalizedLine
+        .substring(0, colonIndex)
+        .trim()
+        .toLowerCase()
+        .replace(/^(?:\d+\.\s*)/, "")
+        .replace(/^[-*]\s*/, "");
+      const value = normalizedLine.substring(colonIndex + 1).trim();
 
       // Map various key formats to standard fields
       if (key.includes("role id")) currentRole.id = value;
@@ -78,7 +84,7 @@ function parseTextBasedRole(text) {
       else if (key.includes("location")) {
         currentRole.location = value;
         // Extract location type from parentheses
-        const typeMatch = line.match(/\((.*?)\)/);
+        const typeMatch = normalizedLine.match(/\((.*?)\)/);
         if (typeMatch) {
           currentRole.type = typeMatch[1];
         }
@@ -137,12 +143,12 @@ function extractRoles(table) {
   // Create a mapping of header index to field name
   const fieldMap = {};
   const aliases = {
-    role: ["role", "title", "position"],
+    title: ["title", "position", "role title"],
     company: ["company", "client", "employer", "organization"],
     location: ["location", "city", "place"],
     type: ["type", "work type", "mode", "status"],
     duration: ["duration", "dates", "timeframe", "period", "term"],
-    id: ["id", "role id", "role_id", "number"],
+    id: ["role id", "role_id", "id", "number"],
   };
 
   // Map headers to field names
@@ -166,13 +172,8 @@ function extractRoles(table) {
       }
     }
 
-    // Only include rows that have at least a title and company
-    if (role.role || role.title || role.company) {
-      // Normalize field names
-      if (!role.title && role.role) {
-        role.title = role.role;
-        delete role.role;
-      }
+    // Only include rows that look like roles
+    if (role.id || role.title || role.company) {
       roles.push(role);
     }
   }

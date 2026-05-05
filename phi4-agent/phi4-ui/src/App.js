@@ -34,10 +34,14 @@ function App() {
           const convId = parseInt(savedActive);
           setActiveConv(convId);
           const conv = parsed.find((c) => c.id === convId);
-          if (conv) setMessages(conv.messages);
+          if (conv) {
+            setMessages(conv.messages);
+            setTraces(conv.traces || []);
+          }
         } else if (parsed.length > 0) {
           setActiveConv(parsed[0].id);
           setMessages(parsed[0].messages);
+          setTraces(parsed[0].traces || []);
         }
       } else {
         console.log("[App] No saved conversations found");
@@ -60,15 +64,15 @@ function App() {
     }
   }, [conversations, activeConv]);
 
-  // Save messages back to conversation whenever they change
+  // Save messages + traces back to conversation whenever they change
   useEffect(() => {
     if (activeConv !== null && conversations.length > 0) {
       console.log("[App] Syncing messages to conversation:", activeConv, "messages:", messages.length);
       setConversations((prev) =>
-        prev.map((c) => (c.id === activeConv ? { ...c, messages } : c))
+        prev.map((c) => (c.id === activeConv ? { ...c, messages, traces } : c))
       );
     }
-  }, [messages, activeConv]);
+  }, [messages, traces, activeConv]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -97,12 +101,13 @@ function App() {
   const switchConversation = (id) => {
     if (activeConv !== null && messages.length > 0) {
       setConversations((prev) =>
-        prev.map((c) => (c.id === activeConv ? { ...c, messages } : c))
+        prev.map((c) => (c.id === activeConv ? { ...c, messages, traces } : c))
       );
     }
     const conv = conversations.find((c) => c.id === id);
     setActiveConv(id);
     setMessages(conv ? conv.messages : []);
+    setTraces(conv ? (conv.traces || []) : []);
   };
 
   const deleteConversation = (e, id) => {
