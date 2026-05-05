@@ -215,6 +215,9 @@ def _build_tool_descriptions(tool_map):
             params.append(f"{pname}{req}:{ptype}")
         param_str = f" ({', '.join(params)})" if params else ""
         lines.append(f"- **{name}**{param_str}: {desc}")
+        # Add special note for search_roles about pageSize
+        if name == "search_roles":
+            lines.append("  ⚠️  **ALWAYS pass `pageSize: 10` to get multiple results**, otherwise only 1 result is returned.")
     return "\n".join(lines)
 
 
@@ -247,7 +250,8 @@ class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     iteration: int  # counts tool-call rounds; reset per conversation turn
 
-
+
+
 # Keep system prompt + last N messages to avoid context overflow.
 # Tool results (search_roles etc.) can be thousands of tokens — truncate aggressively.
 _MAX_HISTORY_MESSAGES = 10
@@ -281,7 +285,8 @@ def _truncate_history(msgs, max_msgs=_MAX_HISTORY_MESSAGES):
     return result
 
 
-def build_agent(extra_tools=None):
+
+def build_agent(extra_tools=None):
     all_tools = list(local_tools) + (extra_tools or [])
     tool_map = {t.name: t for t in all_tools}
     base_prompt = _load_system_prompt()

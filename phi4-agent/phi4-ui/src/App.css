@@ -151,12 +151,38 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+.clear-history-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-top: 8px;
+}
+
+.clear-history-btn:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.clear-history-btn:active {
+  opacity: 0.8;
+}
+
 /* ===== Main Chat ===== */
 .chat-main {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  background: var(--bg-primary);
 }
 
 .topbar {
@@ -193,12 +219,24 @@ html, body, #root {
   color: var(--text-primary);
 }
 
-/* ===== Chat Area ===== */
+/* ===== Chat Area with Trace Panel ===== */
+.chat-container {
+  flex: 1;
+  display: flex;
+  gap: 0;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-primary);
+}
+
 .chat-area {
   flex: 1;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-primary);
 }
 
 .empty-state {
@@ -373,6 +411,9 @@ html, body, #root {
   flex-direction: column;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border);
 }
 
 .input-box {

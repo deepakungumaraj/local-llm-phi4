@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "PowerShell($file = Get-Item \"C:\\\\dev\\\\local-llm-phi4\\\\slide-deck-v2.pptx\"; Write-Output \"Size: $\\([math]::Round\\($file.Length/1KB, 1\\)\\) KB  |  Modified: $\\($file.LastWriteTime\\)\")",
+      "PowerShell(Get-Content *)"
+    ]
+  }
+}

@@ -43,3 +43,6 @@ refresh_token.txt
 # Server logs (runtime artifacts)
 *.log
 *.err
+
+# Office documents
+*.pptx

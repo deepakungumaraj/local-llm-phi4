@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import TracePanel from "./TracePanel";
+import RoleCard from "./RoleCard";
+import { parseRoleContent } from "./roleParser";
 import "./App.css";
 
 function App() {
@@ -11,9 +14,55 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [traces, setTraces] = useState([]);
+  const [tracePanelOpen, setTracePanelOpen] = useState(true);
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
   const abortRef = useRef(null);
+
+  // Load conversations from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("phi4_conversations");
+      const savedActive = localStorage.getItem("phi4_active_conv");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setConversations(parsed);
+        if (savedActive && parsed.some((c) => c.id === parseInt(savedActive))) {
+          const convId = parseInt(savedActive);
+          setActiveConv(convId);
+          const conv = parsed.find((c) => c.id === convId);
+          if (conv) setMessages(conv.messages);
+        } else if (parsed.length > 0) {
+          setActiveConv(parsed[0].id);
+          setMessages(parsed[0].messages);
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to load conversations from localStorage:", err);
+    }
+  }, []);
+
+  // Save conversations to localStorage whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem("phi4_conversations", JSON.stringify(conversations));
+      if (activeConv !== null) {
+        localStorage.setItem("phi4_active_conv", activeConv.toString());
+      }
+    } catch (err) {
+      console.warn("Failed to save conversations to localStorage:", err);
+    }
+  }, [conversations, activeConv]);
+
+  // Save messages back to conversation whenever they change
+  useEffect(() => {
+    if (activeConv !== null && messages.length > 0) {
+      setConversations((prev) =>
+        prev.map((c) => (c.id === activeConv ? { ...c, messages } : c))
+      );
+    }
+  }, [messages, activeConv]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -56,6 +105,17 @@ function App() {
     if (activeConv === id) {
       setActiveConv(null);
       setMessages([]);
+      localStorage.removeItem("phi4_active_conv");
+    }
+  };
+
+  const clearAllConversations = () => {
+    if (window.confirm("Are you sure? This will delete all conversation history.")) {
+      setConversations([]);
+      setActiveConv(null);
+      setMessages([]);
+      localStorage.removeItem("phi4_conversations");
+      localStorage.removeItem("phi4_active_conv");
     }
   };
 
@@ -98,6 +158,7 @@ function App() {
     setInput("");
     setLoading(true);
     setStatusText("Thinking...");
+    setTraces([]);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -151,6 +212,9 @@ function App() {
                 setStatusText(`🔧 Calling ${payload.tool}...`);
               } else if (eventType === "tool_end") {
                 setStatusText("Thinking...");
+              } else if (eventType === "trace") {
+                // Add trace event to panel
+                setTraces((prev) => [...prev, payload]);
               } else if (eventType === "status") {
                 if (payload.status === "thinking") setStatusText("Thinking...");
                 else if (payload.status === "Summarising...") setStatusText("📝 Summarising...");                else if (payload.status === "Summarising...") setStatusText("📝 Summarising...");
@@ -223,6 +287,16 @@ function App() {
     }
   };
 
+  const handleRoleView = (roleId) => {
+    setInput(`Show me details for role ${roleId}`);
+    inputRef.current?.focus();
+  };
+
+  const handleRoleApply = (roleId) => {
+    setInput(`Apply for role ${roleId}`);
+    inputRef.current?.focus();
+  };
+
   return (
     <div className="layout">
       {/* Sidebar */}
@@ -256,6 +330,14 @@ function App() {
             <span className="model-dot"></span>
             phi4-mini
           </div>
+          <button 
+            className="clear-history-btn"
+            onClick={clearAllConversations}
+            title="Clear all conversation history"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6h16zM10 11v6M14 11v6"/></svg>
+            Clear
+          </button>
         </div>
       </aside>
 
@@ -272,7 +354,8 @@ function App() {
           <h1 className="topbar-title">Local AI Assistant</h1>
         </header>
 
-        <div className="chat-area">
+        <div className="chat-container">
+          <div className="chat-area">
           {messages.length === 0 && !loading ? (
             <div className="empty-state">
               <div className="empty-icon">
@@ -299,9 +382,36 @@ function App() {
                       {msg.role === "user" ? "You" : "Phi4-mini"}
                     </span>
                     <div className="msg-text">
-                      {msg.role === "assistant"
-                        ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                        : msg.content}
+                      {msg.role === "assistant" ? (
+                        <>
+                          {(() => {
+                            const parsed = parseRoleContent(msg.content);
+                            return (
+                              <>
+                                {parsed.roles && parsed.roles.length > 0 && (
+                                  <div className="role-cards-container">
+                                    {parsed.roles.map((role, idx) => (
+                                      <RoleCard
+                                        key={idx}
+                                        role={role}
+                                        onView={handleRoleView}
+                                        onApply={handleRoleApply}
+                                      />
+                                    ))}
+                                  </div>
+                                )}
+                                {parsed.cleanContent && (
+                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                    {parsed.cleanContent}
+                                  </ReactMarkdown>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </>
+                      ) : (
+                        msg.content
+                      )}
                     </div>
                   </div>
                 </div>
@@ -323,6 +433,13 @@ function App() {
               <div ref={chatEndRef} />
             </div>
           )}
+          </div>
+
+          <TracePanel 
+            traces={traces} 
+            isOpen={tracePanelOpen} 
+            onToggle={() => setTracePanelOpen(!tracePanelOpen)} 
+          />
         </div>
 
         <div className="input-container">

@@ -503,15 +503,50 @@ async def chat_stream(request: ChatRequest):
 
                 elif kind == "on_tool_start":
                     name = event.get("name", "unknown")
+                    tool_input = event.get("data", {}).get("input", {})
                     yield {"event": "tool_start", "data": json.dumps({"tool": name})}
+                    # Emit structured trace event per the demo plan
+                    yield {"event": "trace", "data": json.dumps({
+                        "node": "tool",
+                        "tool": name,
+                        "args": tool_input,
+                        "ts": time.time()
+                    })}
                 elif kind == "on_tool_end":
                     name = event.get("name", "unknown")
+                    tool_output = event.get("data", {}).get("output", None)
                     yield {"event": "tool_end", "data": json.dumps({"tool": name})}
+                    # Emit trace event showing tool completion
+                    yield {"event": "trace", "data": json.dumps({
+                        "node": "tool_end",
+                        "tool": name,
+                        "result": tool_output if isinstance(tool_output, (str, dict, list)) else str(tool_output),
+                        "ts": time.time()
+                    })}
                 elif kind == "on_chain_start":
                     name = event.get("name", "")
-                    if name == "reporter":
+                    if name == "agent":
+                        # Emit trace for agent thinking
+                        yield {"event": "trace", "data": json.dumps({
+                            "node": "agent",
+                            "status": "thinking...",
+                            "ts": time.time()
+                        })}
+                    elif name == "reporter":
+                        # Emit trace for reporter synthesizing
+                        yield {"event": "trace", "data": json.dumps({
+                            "node": "reporter",
+                            "status": "synthesizing...",
+                            "ts": time.time()
+                        })}
                         yield {"event": "status", "data": json.dumps({"status": "Summarising..."})}
 
+            # Emit completion trace event
+            yield {"event": "trace", "data": json.dumps({
+                "node": "done",
+                "thread_id": thread_id,
+                "ts": time.time()
+            })}
             yield {"event": "done", "data": json.dumps({"status": "complete", "thread_id": thread_id})}
         except Exception as e:
             traceback.print_exc()
