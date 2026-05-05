@@ -25,8 +25,10 @@ function App() {
     try {
       const saved = localStorage.getItem("phi4_conversations");
       const savedActive = localStorage.getItem("phi4_active_conv");
+      console.log("[App] Loading from localStorage:", { saved: saved ? "exists" : "null", savedActive });
       if (saved) {
         const parsed = JSON.parse(saved);
+        console.log("[App] Loaded conversations:", parsed.length, "items");
         setConversations(parsed);
         if (savedActive && parsed.some((c) => c.id === parseInt(savedActive))) {
           const convId = parseInt(savedActive);
@@ -37,6 +39,8 @@ function App() {
           setActiveConv(parsed[0].id);
           setMessages(parsed[0].messages);
         }
+      } else {
+        console.log("[App] No saved conversations found");
       }
     } catch (err) {
       console.warn("Failed to load conversations from localStorage:", err);
@@ -46,6 +50,7 @@ function App() {
   // Save conversations to localStorage whenever they change
   useEffect(() => {
     try {
+      console.log("[App] Saving to localStorage:", conversations.length, "conversations");
       localStorage.setItem("phi4_conversations", JSON.stringify(conversations));
       if (activeConv !== null) {
         localStorage.setItem("phi4_active_conv", activeConv.toString());
@@ -57,7 +62,8 @@ function App() {
 
   // Save messages back to conversation whenever they change
   useEffect(() => {
-    if (activeConv !== null && messages.length > 0) {
+    if (activeConv !== null && conversations.length > 0) {
+      console.log("[App] Syncing messages to conversation:", activeConv, "messages:", messages.length);
       setConversations((prev) =>
         prev.map((c) => (c.id === activeConv ? { ...c, messages } : c))
       );
